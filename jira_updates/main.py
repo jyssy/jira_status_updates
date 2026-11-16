@@ -13,14 +13,19 @@ from jira_updates.config import (
     jira_config,
     keychain_secret,
 )
-from jira_updates.jira_api import JiraRequestError, fetch_assigned_issues
+from jira_updates.jira_api import JiraRequestError, fetch_assigned_issues, fetch_issue_activity
 from jira_updates.local_store import (
     LocalDataError,
+    activity_digest_lines,
+    activity_summary,
     clear_pending_digest,
     digest_text,
     load_state,
+    local_ticket_keys,
     prepare_sync,
+    save_issue_activity,
     save_sync,
+    update_ticket_activity,
 )
 from jira_updates.slack import SlackPostError, post_message
 
@@ -46,6 +51,11 @@ def _arguments() -> argparse.Namespace:
         action="store_true",
         help="Post one clearly labeled test message; does not contact Jira.",
     )
+    modes.add_argument(
+        "--fetch-activity",
+        action="store_true",
+        help="Fetch comments, changelog, and attachment metadata for cached tickets.",
+    )
     return parser.parse_args()
 
 
@@ -57,10 +67,39 @@ def _jira_run(dry_run: bool, local_only: bool) -> int:
     checked_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="minutes")
     state = load_state()
     new_state, file_contents, new_updates = prepare_sync(issues, state, checked_at, config.site_url)
+    changed_keys = [
+        str(issue.get("key", "")) for issue in issues
+        if issue.get("key") in state.get("issues", {})
+        and str((issue.get("fields") or {}).get("updated", ""))
+        != str(state["issues"][issue["key"]].get("updated", ""))
+    ]
+    activity_updates = {
+        key: fetch_issue_activity(config.api_base_url, config.email, token, key)
+        for key in changed_keys
+    }
+    if activity_updates and not dry_run:
+        for key, activity in activity_updates.items():
+            save_issue_activity(key, activity)
+        new_state, file_contents, new_updates = prepare_sync(
+            issues, state, checked_at, config.site_url
+        )
+    for key, activity in activity_updates.items():
+        prior_updated = state["issues"][key].get("updated")
+        details = activity_digest_lines(activity, prior_updated)
+        if details:
+            new_state["pending_digest"].append(
+                f"• `{key}` — recent Jira activity:\n" + "\n".join(f"  {line}" for line in details)
+            )
     combined_updates = new_state["pending_digest"]
 
     if dry_run:
         print(f"Found {len(issues)} currently assigned issue(s). No local files were changed.")
+        for key, activity in activity_updates.items():
+            print(f"\nRecent Jira activity for {key}:")
+            for line in activity_summary(activity, state["issues"][key].get("updated")) or [
+                "- No new comments or field changes found."
+            ]:
+                print(line)
         if combined_updates:
             print("\n" + digest_text(combined_updates))
         else:
@@ -84,6 +123,19 @@ def _jira_run(dry_run: bool, local_only: bool) -> int:
     return 0
 
 
+def _activity_run() -> int:
+    config = jira_config()
+    token = keychain_secret(JIRA_TOKEN_ITEM, config.email)
+    issue_keys = local_ticket_keys()
+    print(f"Fetching comments, changelog, and attachment metadata for {len(issue_keys)} local ticket(s)…")
+    for issue_key in issue_keys:
+        activity = fetch_issue_activity(config.api_base_url, config.email, token, issue_key)
+        save_issue_activity(issue_key, activity)
+        update_ticket_activity(issue_key, activity)
+    print(f"Saved issue activity under .jira-data/activity/ for {len(issue_keys)} ticket(s).")
+    return 0
+
+
 def main() -> None:
     args = _arguments()
     try:
@@ -91,6 +143,10 @@ def main() -> None:
             webhook = keychain_secret(SLACK_WEBHOOK_ITEM)
             post_message(webhook, "[TEST] Jira Updates webhook is connected.")
             print("Test message posted to Slack.")
+            return
+
+        if args.fetch_activity:
+            _activity_run()
             return
 
         _jira_run(dry_run=args.dry_run, local_only=args.local_only)

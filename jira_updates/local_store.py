@@ -14,6 +14,7 @@ from jira_updates.config import ROOT
 
 DATA_DIR = ROOT / ".jira-data"
 TICKETS_DIR = DATA_DIR / "tickets"
+ACTIVITY_DIR = DATA_DIR / "activity"
 STATE_FILE = DATA_DIR / "state.json"
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
 TRACKED_FIELDS = ("summary", "status", "priority")
@@ -78,7 +79,153 @@ def _render_ticket(key: str, snapshot: dict, history: list[str], site_url: str |
     if site_url:
         lines[6:6] = [f"- **Jira:** [{key}]({site_url}/browse/{key})", ""]
     lines.extend(history or ["- First local snapshot."])
-    return "\n".join(lines) + "\n"
+    rendered = "\n".join(lines) + "\n"
+    cached = _load_issue_activity(key)
+    return _with_activity_section(rendered, cached) if cached else rendered
+
+
+def _adf_text(value: object) -> str:
+    """Extract readable text from Jira's string or Atlassian document comment body."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return " ".join(part for part in (_adf_text(item) for item in value) if part)
+    if isinstance(value, dict):
+        own = value.get("text", "")
+        child = _adf_text(value.get("content", []))
+        return " ".join(part for part in (own, child) if part)
+    return ""
+
+
+def _activity_entries(activity: dict) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for comment in activity.get("comments", []):
+        author = (comment.get("author") or {}).get("displayName", "Unknown author")
+        body = _plain_text(_adf_text(comment.get("body", "")))
+        if body:
+            entries.append((str(comment.get("created", "")),
+                            f"- **Comment ({_plain_text(author)}):** {body}"))
+    for event in activity.get("changelog", []):
+        author = (event.get("author") or {}).get("displayName", "Unknown author")
+        created = str(event.get("created", ""))
+        for item in event.get("items", []):
+            field = _plain_text(item.get("field", "Field"))
+            old = _plain_text(item.get("fromString", "")) or "—"
+            new = _plain_text(item.get("toString", "")) or "—"
+            entries.append((created,
+                            f"- **Change ({_plain_text(author)}):** {field}: {old} → {new}"))
+    for attachment in activity.get("attachments", []):
+        author = (attachment.get("author") or {}).get("displayName", "Unknown author")
+        filename = _plain_text(attachment.get("filename", "Unnamed file"))
+        entries.append((str(attachment.get("created", "")),
+                        f"- **File attached ({_plain_text(author)}):** {filename}"))
+    entries.sort(key=lambda entry: entry[0], reverse=True)
+    return entries
+
+
+def _activity_lines(activity: dict) -> list[str]:
+    entries = _activity_entries(activity)
+    return [f"- _{created or 'Unknown time'}_ {line[2:]}" for created, line in entries[:30]]
+
+
+def activity_summary(activity: dict, since: str | None = None) -> list[str]:
+    """Return readable activity lines, optionally limited to events after a timestamp."""
+    entries = _activity_entries(activity)
+    if since:
+        try:
+            threshold = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            if threshold.tzinfo is None:
+                threshold = threshold.replace(tzinfo=timezone.utc)
+            threshold = threshold.astimezone(timezone.utc)
+        except ValueError:
+            threshold = None
+        if threshold is not None:
+            filtered: list[tuple[str, str]] = []
+            for created, line in entries:
+                try:
+                    event_time = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    if event_time.tzinfo is None:
+                        event_time = event_time.replace(tzinfo=timezone.utc)
+                    if event_time.astimezone(timezone.utc) > threshold:
+                        filtered.append((created, line))
+                except ValueError:
+                    continue
+            entries = filtered
+    return [f"- _{created or 'Unknown time'}_ {line[2:]}" for created, line in entries[:30]]
+
+
+def activity_digest_lines(activity: dict, since: str | None = None) -> list[str]:
+    """Return only newly added comments and attachment metadata for Slack."""
+    if not since:
+        return []
+    try:
+        threshold = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        if threshold.tzinfo is None:
+            threshold = threshold.replace(tzinfo=timezone.utc)
+        threshold = threshold.astimezone(timezone.utc)
+    except ValueError:
+        return []
+
+    candidates: list[tuple[str, str]] = []
+    for comment in activity.get("comments", []):
+        created = str(comment.get("created", ""))
+        author = _plain_text((comment.get("author") or {}).get("displayName", "Unknown author"))
+        body = _plain_text(_adf_text(comment.get("body", "")))
+        if body:
+            candidates.append((created, f"New comment by {author}: {body}"))
+    for attachment in activity.get("attachments", []):
+        created = str(attachment.get("created", ""))
+        author = _plain_text((attachment.get("author") or {}).get("displayName", "Unknown author"))
+        filename = _plain_text(attachment.get("filename", "Unnamed file"))
+        size = attachment.get("size")
+        size_text = f", {size} bytes" if isinstance(size, int) else ""
+        candidates.append((created, f"New file attached by {author}: {filename}{size_text}"))
+
+    digest: list[str] = []
+    for created, detail in sorted(candidates, key=lambda item: item[0], reverse=True):
+        try:
+            event_time = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            if event_time.tzinfo is None:
+                event_time = event_time.replace(tzinfo=timezone.utc)
+            if event_time.astimezone(timezone.utc) <= threshold:
+                continue
+        except ValueError:
+            continue
+        if len(detail) > 1200:
+            detail = detail[:1197].rstrip() + "..."
+        digest.append(f"{created} — {detail}")
+        if len(digest) == 10:
+            break
+    return digest
+
+
+def _with_activity_section(content: str, activity: dict) -> str:
+    start = "<!-- Jira activity start -->"
+    end = "<!-- Jira activity end -->"
+    lines = [start, "## Recent Jira activity", ""]
+    lines.extend(_activity_lines(activity) or ["- No comments or field changes found."])
+    lines.append(end)
+    section = "\n".join(lines)
+    if start in content and end in content:
+        before = content.split(start, 1)[0].rstrip()
+        after = content.split(end, 1)[1].lstrip("\n")
+        content = before + "\n\n" + section + ("\n" + after if after else "\n")
+    else:
+        content = content.rstrip() + "\n\n" + section + "\n"
+    return content
+
+
+def _load_issue_activity(issue_key: str) -> dict | None:
+    path = ACTIVITY_DIR / f"{issue_key}.json"
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LocalDataError("Could not read local Jira activity data safely.") from exc
+    if not isinstance(value, dict):
+        raise LocalDataError("Local Jira activity data has an unexpected format.")
+    return value
 
 
 def prepare_sync(
@@ -172,6 +319,33 @@ def save_sync(state: dict, file_contents: dict[Path, str], known_issue_keys: set
 def clear_pending_digest(state: dict) -> None:
     state["pending_digest"] = []
     _atomic_write(STATE_FILE, json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+
+
+def local_ticket_keys() -> list[str]:
+    """Return valid Jira keys represented by the existing local ticket baseline."""
+    if not TICKETS_DIR.is_dir():
+        raise LocalDataError("No local ticket baseline exists under .jira-data/tickets/.")
+    return sorted(
+        path.stem for path in TICKETS_DIR.glob("*.md")
+        if ISSUE_KEY_PATTERN.fullmatch(path.stem)
+    )
+
+
+def save_issue_activity(issue_key: str, activity: dict) -> Path:
+    """Atomically save comments and changelog separately from ticket snapshots."""
+    path = ACTIVITY_DIR / f"{issue_key}.json"
+    _atomic_write(path, json.dumps(activity, indent=2, ensure_ascii=False) + "\n")
+    return path
+
+
+def update_ticket_activity(issue_key: str, activity: dict) -> None:
+    """Refresh the activity section in an existing ticket file without replacing its history."""
+    path = TICKETS_DIR / f"{issue_key}.md"
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise LocalDataError("Could not read a local ticket file safely.") from exc
+    _atomic_write(path, _with_activity_section(content, activity))
 
 
 def digest_text(updates: list[str]) -> str:

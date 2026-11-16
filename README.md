@@ -36,6 +36,10 @@ python3 -m jira_updates --dry-run
 # First local setup: write snapshots and queue changes; sends nothing to Slack.
 python3 -m jira_updates --local-only
 
+# Read comments, changelog, and attachment metadata for cached tickets into ticket files
+# and .jira-data/activity/.
+python3 -m jira_updates --fetch-activity
+
 # Test only the Slack webhook with a clearly labeled message; does not call Jira.
 python3 -m jira_updates --test-slack
 
