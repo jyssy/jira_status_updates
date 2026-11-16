@@ -284,9 +284,14 @@ def prepare_sync(
         if event:
             history.append(f"- {checked_at} — {event}")
         if deltas:
+            digest_event = event
+            if event == "Updated in Jira; no tracked fields changed":
+                digest_event = "🟨 *Updated in Jira; no tracked fields changed*"
+            else:
+                digest_event = f"🟩 *{event}*"
             new_updates.append(
                 f"• {slack_issue_label(key, site_url)} — {current['summary'] or '(no summary)'} "
-                f"({current['status'] or 'Unknown'}): {event}"
+                f"({current['status'] or 'Unknown'}): {digest_event}"
             )
 
         next_issues[key] = {**current, "history": history, "assigned": True}

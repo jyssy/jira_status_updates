@@ -20,8 +20,9 @@ inside the file rather than using an API-provided title in a path. Store
 snapshots and sync state under `.jira-data/`, which is ignored by Git. Each
 successful run sends one Slack digest covering changes since the previous
 successful post. Include only the date, issue key, status, and a short change
-indicator or link. Do not send descriptions, comments, or full snapshots to
-Slack.
+indicator or link, plus newly added or edited comment text and newly attached
+file metadata. Do not send descriptions, attachment contents, or full snapshots
+to Slack.
 
 Suggested eventual layout:
 
@@ -47,6 +48,18 @@ The files remain on this machine and outside version control. Git history is
 not needed for the first version; if a durable shared archive is later wanted,
 decide its access, retention, and review rules before tracking ticket content.
 
+## Installed macOS cron schedule
+
+The updater runs at 7:00, 11:00, 15:00, 19:00, and 23:00 local time, Monday
+through Friday. The cron entry runs the normal sync, which refreshes Jira,
+updates local ticket files, and posts queued changes to Slack:
+
+```cron
+0 7-23/4 * * 1-5 cd /Users/jelambeadmin/Documents/access-sysops/jira_status_updates && /opt/homebrew/bin/python3 -m jira_updates >> /Users/jelambeadmin/Documents/access-sysops/jira_status_updates/.jira-data/cron.log 2>&1
+```
+
+Cron output is appended to `.jira-data/cron.log`, which is Git-ignored.
+
 ## Access and delivery
 
 - Confirm the site is Jira Cloud and use the account's exact site/cloud ID.
@@ -61,9 +74,9 @@ decide its access, retention, and review rules before tracking ticket content.
   injected environment variables. Never put them in this repository, logs, or
   ticket files. A Slack incoming webhook is channel-bound; install/configure
   it for the new private channel and keep its URL secret.
-- Schedule locally with `launchd` on macOS (or the host's scheduler). Avoid a
-  hosted workflow for the first version: it would move full ticket snapshots
-  off this machine and would require a write-back strategy to preserve them.
+- The macOS user crontab runs the command above on weekdays. Avoid a hosted
+  workflow for this version: it would move full ticket snapshots off this
+  machine and require a write-back strategy to preserve them.
 - The script should only make Jira GET/search requests and one Slack POST.
   It must not create, edit, transition, comment on, or assign issues.
 
@@ -106,8 +119,8 @@ delivery mechanism for a scheduled Jira script.
 3. Run `python3 -m jira_updates --dry-run` to preview the issue set and changes.
 4. Use `--local-only` to write snapshots without posting, then
    `--test-slack` to send a labeled test message.
-5. Add a local four-hour schedule only after successful manual runs. The same
-   one-shot command refreshes ticket files and posts any pending Slack digest.
+5. The local weekday cron schedule is installed. The same one-shot command
+   refreshes ticket files and posts any pending Slack digest.
 
 ## Documentation
 
