@@ -110,8 +110,12 @@ def _activity_entries(activity: dict) -> list[tuple[str, str]]:
         author = (comment.get("author") or {}).get("displayName", "Unknown author")
         body = _plain_text(_adf_text(comment.get("body", "")))
         if body:
-            entries.append((str(comment.get("created", "")),
-                            f"- **Comment ({_plain_text(author)}):** {body}"))
+            created = str(comment.get("created", ""))
+            updated = str(comment.get("updated", ""))
+            edited = bool(updated and updated != created)
+            entries.append((updated or created,
+                            f"- **{'Edited comment' if edited else 'Comment'} "
+                            f"({_plain_text(author)}):** {body}"))
     for event in activity.get("changelog", []):
         author = (event.get("author") or {}).get("displayName", "Unknown author")
         created = str(event.get("created", ""))
@@ -176,17 +180,21 @@ def activity_digest_lines(activity: dict, since: str | None = None) -> list[str]
     candidates: list[tuple[str, str]] = []
     for comment in activity.get("comments", []):
         created = str(comment.get("created", ""))
+        updated = str(comment.get("updated", ""))
+        activity_time = updated or created
+        edited = bool(updated and updated != created)
         author = _plain_text((comment.get("author") or {}).get("displayName", "Unknown author"))
         body = _plain_text(_adf_text(comment.get("body", "")))
         if body:
-            candidates.append((created, f"New comment by {author}: {body}"))
+            label = "Edited comment" if edited else "New comment"
+            candidates.append((activity_time, f"{label} by *{author}*: {body}"))
     for attachment in activity.get("attachments", []):
         created = str(attachment.get("created", ""))
         author = _plain_text((attachment.get("author") or {}).get("displayName", "Unknown author"))
         filename = _plain_text(attachment.get("filename", "Unnamed file"))
         size = attachment.get("size")
         size_text = f", {size} bytes" if isinstance(size, int) else ""
-        candidates.append((created, f"New file attached by {author}: {filename}{size_text}"))
+        candidates.append((created, f"New file attached by *{author}*: {filename}{size_text}"))
 
     digest: list[str] = []
     for created, detail in sorted(candidates, key=lambda item: item[0], reverse=True):
