@@ -186,15 +186,16 @@ def activity_digest_lines(activity: dict, since: str | None = None) -> list[str]
         author = _plain_text((comment.get("author") or {}).get("displayName", "Unknown author"))
         body = _plain_text(_adf_text(comment.get("body", "")))
         if body:
+            marker = "🟧" if edited else "🟩"
             label = "Edited comment" if edited else "New comment"
-            candidates.append((activity_time, f"{label} by *{author}*: {body}"))
+            candidates.append((activity_time, f"{marker} {label} by *{author}*: {body}"))
     for attachment in activity.get("attachments", []):
         created = str(attachment.get("created", ""))
         author = _plain_text((attachment.get("author") or {}).get("displayName", "Unknown author"))
         filename = _plain_text(attachment.get("filename", "Unnamed file"))
         size = attachment.get("size")
         size_text = f", {size} bytes" if isinstance(size, int) else ""
-        candidates.append((created, f"New file attached by *{author}*: {filename}{size_text}"))
+        candidates.append((created, f"🟩 New file attached by *{author}*: {filename}{size_text}"))
 
     digest: list[str] = []
     for created, detail in sorted(candidates, key=lambda item: item[0], reverse=True):
@@ -288,7 +289,7 @@ def prepare_sync(
             if event == "Updated in Jira; no tracked fields changed":
                 digest_event = "🟨 *Updated in Jira; no tracked fields changed*"
             else:
-                digest_event = f"🟩 *{event}*"
+                digest_event = event
             new_updates.append(
                 f"• {slack_issue_label(key, site_url)} — {current['summary'] or '(no summary)'} "
                 f"({current['status'] or 'Unknown'}): {digest_event}"
