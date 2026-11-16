@@ -15,8 +15,8 @@ every four hours later with a local scheduler; it does not schedule itself.
 ### Setup
 
 1. Copy `.jira-status.env.example` to `.jira-status.env` and set
-   `JIRA_API_BASE_URL` and `JIRA_EMAIL`. Set `JIRA_SITE_URL` if you want
-   clickable Jira links in the ticket files.
+   `JIRA_API_BASE_URL` and `JIRA_EMAIL`. Set `JIRA_SITE_URL` to include clickable
+   Jira links in ticket files and Slack digests.
 2. In macOS Keychain, add the Jira token as a generic password named
    `Jira Updates API Cred` (the account is your Atlassian email) and the
    Slack URL as `Jira Updates Webhook` (account can be blank).

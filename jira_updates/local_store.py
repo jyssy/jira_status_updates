@@ -41,6 +41,13 @@ def _plain_text(value: object) -> str:
     return " ".join(text.replace("|", "\\|").split())
 
 
+def slack_issue_label(key: str, site_url: str | None) -> str:
+    """Format a Jira issue as a clickable Slack link when the site URL is configured."""
+    if site_url:
+        return f"<{site_url}/browse/{key}|{key}>"
+    return f"`{key}`"
+
+
 def _issue_snapshot(issue: dict) -> dict[str, str]:
     fields = issue.get("fields", {})
     return {
@@ -193,7 +200,8 @@ def activity_digest_lines(activity: dict, since: str | None = None) -> list[str]
             continue
         if len(detail) > 1200:
             detail = detail[:1197].rstrip() + "..."
-        digest.append(f"{created} — {detail}")
+        display_time = event_time.strftime("%Y-%m-%dT%H:%M")
+        digest.append(f"{display_time} — {detail}")
         if len(digest) == 10:
             break
     return digest
@@ -269,7 +277,7 @@ def prepare_sync(
             history.append(f"- {checked_at} — {event}")
         if deltas:
             new_updates.append(
-                f"• `{key}` — {current['summary'] or '(no summary)'} "
+                f"• {slack_issue_label(key, site_url)} — {current['summary'] or '(no summary)'} "
                 f"({current['status'] or 'Unknown'}): {event}"
             )
 
@@ -286,7 +294,9 @@ def prepare_sync(
         snapshot = {field: previous.get(field, "") for field in (*TRACKED_FIELDS, "updated")}
         next_issues[key] = {**snapshot, "history": history, "assigned": False}
         file_contents[TICKETS_DIR / f"{key}.md"] = _render_ticket(key, snapshot, history, site_url)
-        new_updates.append(f"• `{key}` — no longer appears in your assigned-issues search")
+        new_updates.append(
+            f"• {slack_issue_label(key, site_url)} — no longer appears in your assigned-issues search"
+        )
 
     pending = list(state.get("pending_digest", [])) + new_updates
     new_state = {

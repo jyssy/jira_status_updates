@@ -115,7 +115,8 @@ When a later sync sees an issue's Jira `updated` timestamp change, it also reads
 that issue's comments and changelog and adds a recent activity section to its
 ticket file and includes only comments added and attachment names/metadata newer
 than the previous snapshot in the Slack digest. It does not download attachment
-contents. The opt-in `python3 -m jira_updates --fetch-activity` command refreshes
+contents. Set `JIRA_SITE_URL` to make issue keys clickable in Slack. The opt-in
+`python3 -m jira_updates --fetch-activity` command refreshes
 activity for every locally cached ticket; it does not post to Slack. Raw Jira
 activity is also saved under `.jira-data/activity/`. Treat it as sensitive local
 ticket content.

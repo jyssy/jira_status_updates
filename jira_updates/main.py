@@ -25,6 +25,7 @@ from jira_updates.local_store import (
     prepare_sync,
     save_issue_activity,
     save_sync,
+    slack_issue_label,
     update_ticket_activity,
 )
 from jira_updates.slack import SlackPostError, post_message
@@ -88,7 +89,8 @@ def _jira_run(dry_run: bool, local_only: bool) -> int:
         details = activity_digest_lines(activity, prior_updated)
         if details:
             new_state["pending_digest"].append(
-                f"• `{key}` — recent Jira activity:\n" + "\n".join(f"  {line}" for line in details)
+                f"• {slack_issue_label(key, config.site_url)} — recent Jira activity:\n"
+                + "\n".join(f"  {line}" for line in details)
             )
     combined_updates = new_state["pending_digest"]
 
