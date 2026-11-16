@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local Jira ticket snapshots and sync state (may contain confidential work data)
+.jira-data/
+.jira-status.env
