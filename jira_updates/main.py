@@ -21,6 +21,7 @@ from jira_updates.local_store import (
     clear_pending_digest,
     digest_text,
     load_state,
+    load_issue_activity,
     local_ticket_keys,
     prepare_sync,
     save_issue_activity,
@@ -74,6 +75,7 @@ def _jira_run(dry_run: bool, local_only: bool) -> int:
         and str((issue.get("fields") or {}).get("updated", ""))
         != str(state["issues"][issue["key"]].get("updated", ""))
     ]
+    previous_activity = {key: load_issue_activity(key) for key in changed_keys}
     activity_updates = {
         key: fetch_issue_activity(config.api_base_url, config.email, token, key)
         for key in changed_keys
@@ -86,7 +88,14 @@ def _jira_run(dry_run: bool, local_only: bool) -> int:
         )
     for key, activity in activity_updates.items():
         prior_updated = state["issues"][key].get("updated")
-        details = activity_digest_lines(activity, prior_updated)
+        issue = next(issue for issue in issues if issue.get("key") == key)
+        current_updated = str((issue.get("fields") or {}).get("updated", ""))
+        details = activity_digest_lines(
+            activity,
+            prior_updated,
+            previous_activity.get(key),
+            current_updated or checked_at,
+        )
         if details:
             new_state["pending_digest"].append(
                 f"• {slack_issue_label(key, config.site_url)} — recent Jira activity:\n"

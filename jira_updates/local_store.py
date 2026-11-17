@@ -165,8 +165,13 @@ def activity_summary(activity: dict, since: str | None = None) -> list[str]:
     return [f"- _{created or 'Unknown time'}_ {line[2:]}" for created, line in entries[:30]]
 
 
-def activity_digest_lines(activity: dict, since: str | None = None) -> list[str]:
-    """Return only newly added comments and attachment metadata for Slack."""
+def activity_digest_lines(
+    activity: dict,
+    since: str | None = None,
+    previous_activity: dict | None = None,
+    observed_at: str | None = None,
+) -> list[str]:
+    """Return comment and attachment activity, including locally detected deletions."""
     if not since:
         return []
     try:
@@ -196,6 +201,20 @@ def activity_digest_lines(activity: dict, since: str | None = None) -> list[str]
         size = attachment.get("size")
         size_text = f", {size} bytes" if isinstance(size, int) else ""
         candidates.append((created, f"🟩 New file attached by *{author}*: {filename}{size_text}"))
+
+    current_comment_ids = {
+        str(comment.get("id")) for comment in activity.get("comments", [])
+        if comment.get("id") is not None
+    }
+    if previous_activity:
+        for comment in previous_activity.get("comments", []):
+            comment_id = comment.get("id")
+            if comment_id is None or str(comment_id) in current_comment_ids:
+                continue
+            author = _plain_text((comment.get("author") or {}).get("displayName", "Unknown author"))
+            body = _plain_text(_adf_text(comment.get("body", "")))
+            if body:
+                candidates.append((observed_at or since, f"🟥 Deleted comment by *{author}*: {body}"))
 
     digest: list[str] = []
     for created, detail in sorted(candidates, key=lambda item: item[0], reverse=True):
@@ -243,6 +262,11 @@ def _load_issue_activity(issue_key: str) -> dict | None:
     if not isinstance(value, dict):
         raise LocalDataError("Local Jira activity data has an unexpected format.")
     return value
+
+
+def load_issue_activity(issue_key: str) -> dict | None:
+    """Load a previously cached issue activity snapshot, if available."""
+    return _load_issue_activity(issue_key)
 
 
 def prepare_sync(
